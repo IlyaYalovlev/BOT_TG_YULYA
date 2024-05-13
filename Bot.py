@@ -8,8 +8,12 @@ from openpyxl import Workbook
 import os
 from dotenv import load_dotenv
 
+
+# Определим словарь current_step, чтобы отслеживать текущий шаг для каждого пользователя
+current_step = {}
+
 # Загрузка переменных среды из файла .env
-load_dotenv()
+load_dotenv("BOT.env")
 
 # Получение значений переменных среды
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,35 +22,11 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
+TG_ID1 = int(os.getenv("TG_ID1"))
+TG_ID2 = int(os.getenv("TG_ID2"))
 
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Функция для отправки сообщения "найдёшь для меня минутку?"
-def send_reminder(user_id):
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    item1 = types.KeyboardButton('Да!')
-    item2 = types.KeyboardButton('Нет')
-
-    markup.add(item1, item2)
-
-    bot.send_message(user_id, "Найдёшь для меня минутку?", reply_markup=markup)
-
-# Функция для планирования напоминания
-def remind_later(message):
-    # Запланировать отправку напоминания через 24 часа
-    schedule.every().day.at("14:00").do(send_reminder, message.from_user.id)
-
-    bot.send_message(message.chat.id, "Хорошо, напомню завтра в 14:00.", reply_markup=types.ReplyKeyboardRemove(selective=False))
-
-# Обработчик ответа на вопрос "Найдёшь для меня минутку?"
-@bot.message_handler(func=lambda message: message.text == 'Да!' or message.text == 'Нет')
-def handle_minutes(message):
-    if message.text == 'Да!':
-        bot.send_message(message.chat.id, "Отлично! Как тебя зовут?")
-        bot.register_next_step_handler(message, process_name_step)
-    elif message.text == 'Нет':
-        remind_later(message)
 
 # Стартовое сообщение
 @bot.message_handler(commands=['start'])
@@ -59,8 +39,60 @@ def main(message):
     bot.send_message(message.chat.id, 'Привет! \nДавай познакомимся, сейчас я задам тебе несколько вопросов.',
                      reply_markup=markup)
 
+# Функция для отправки сообщения "найдёшь для меня минутку?"
+def send_reminder(user_id):
+    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    item1 = types.KeyboardButton('Да! Специально для тебя выделил время)')
+    item2 = types.KeyboardButton('Нет Весь в делах(')
+
+    markup.add(item1, item2)
+
+    bot.send_message(user_id, "Найдёшь для меня минутку?", reply_markup=markup)
+
+# Обработчик ответа на вопрос "Давай попозже."
+@bot.message_handler(func=lambda message: message.text == 'Давай попозже.')
+def remind_later(message):
+    # Предложение выбрать время
+    markup = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+    item1 = types.KeyboardButton('Утром')
+    item2 = types.KeyboardButton('В обед')
+    item3 = types.KeyboardButton('Вечером')
+    markup.add(item1, item2, item3)
+    bot.send_message(message.chat.id, "Когда вам удобнее получать напоминания?", reply_markup=markup)
+    # Регистрация следующего шага для обработки выбора времени
+    bot.register_next_step_handler(message, process_reminder_time)
+
+# Обработчик ответа пользователя на запрос времени напоминания
+def process_reminder_time(message):
+    reminder_time = message.text
+    if reminder_time in ['Утром', 'В обед', 'Вечером']:
+        # Установка напоминания в зависимости от выбранного времени
+        if reminder_time == 'Утром':
+            schedule_time = "10:00"
+        elif reminder_time == 'В обед':
+            schedule_time = "14:00"
+        else:
+            schedule_time = "18:00"
+        # Установка расписания для отправки напоминания
+        schedule.every().day.at(schedule_time).do(send_reminder, message.from_user.id)
+        # Ответ пользователю
+        bot.send_message(message.chat.id, f"Хорошо, буду напоминать в {schedule_time}.", reply_markup=types.ReplyKeyboardRemove(selective=False))
+    else:
+        bot.send_message(message.chat.id, "Пожалуйста, выберите время из предложенных вариантов.")
+        # Повторный запрос времени
+        bot.register_next_step_handler(message, process_reminder_time)
+
+
+# Обработчик ответа на вопрос "'Да! Специально для тебя выделил время)'!"
+@bot.message_handler(func=lambda message: message.text == 'Да! Специально для тебя выделил время)' )
+def handle_go(message):
+    markup = types.ReplyKeyboardRemove(selective=False)
+
+    bot.send_message(message.chat.id, 'Отлично! Как тебя зовут?', reply_markup=markup)
+    bot.register_next_step_handler(message, process_name_step)
+
 # Обработчик ответа на вопрос "Поехали!"
-@bot.message_handler(func=lambda message: message.text == 'Поехали!')
+@bot.message_handler(func=lambda message: message.text == 'Поехали!' )
 def handle_go(message):
     markup = types.ReplyKeyboardRemove(selective=False)
 
@@ -131,78 +163,107 @@ def process_age_step(message):
 
 # Запись города в бд
 def process_contact_step(message):
-    contact = message.contact
-    c1 = f"{contact.first_name} {contact.last_name}, {contact.phone_number}"
-    # Соединение с базой данных
-    connection = connect_to_db()
-    if connection is not None:
-        try:
-            cursor = connection.cursor()
-            postgres_update_query = """UPDATE users SET city = %s WHERE user_id = %s"""
-            record_to_update = (c1, message.from_user.id)
-            cursor.execute(postgres_update_query, record_to_update)
-            connection.commit()
-            print("Город успешно сохранен в базе данных")
-        except (Exception, psycopg2.Error) as error:
-            print("Ошибка при выполнении запроса к базе данных:", error)
-        finally:
-            if connection:
-                cursor.close()
-                connection.close()
-                print("Соединение с базой данных закрыто")
+    # Проверяем, является ли сообщение контактом
+    if message.contact:
+        contact = message.contact
+        c1 = f"{contact.first_name} {contact.last_name}, {contact.phone_number}"
+        contact = message.contact
+        c1 = f"{contact.first_name} {contact.last_name}, {contact.phone_number}"
+        # Соединение с базой данных
+        connection = connect_to_db()
+        if connection is not None:
+            try:
+                cursor = connection.cursor()
+                postgres_update_query = """UPDATE users SET city = %s WHERE user_id = %s"""
+                record_to_update = (c1, message.from_user.id)
+                cursor.execute(postgres_update_query, record_to_update)
+                connection.commit()
+                print("Город успешно сохранен в базе данных")
+            except (Exception, psycopg2.Error) as error:
+                print("Ошибка при выполнении запроса к базе данных:", error)
+            finally:
+                if connection:
+                    cursor.close()
+                    connection.close()
+                    print("Соединение с базой данных закрыто")
+        else:
+            print("Не удалось подключиться к базе данных")
+        markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        item1 = types.KeyboardButton('IT')
+        item2 = types.KeyboardButton('Маркетинг')
+        item3 = types.KeyboardButton('Продюсирование')
+        item4 = types.KeyboardButton('Бьюти')
+        item5 = types.KeyboardButton('Фешн')
+        item6 = types.KeyboardButton('Другое')
+
+        # Добавляем кнопки в клавиатуру
+        markup.add(item1, item2, item3, item4, item5, item6)
+        # Задаем вопрос о Нише
+        bot.send_message(message.chat.id, 'В какой нише ты сейчас работаешь?', reply_markup=markup)
+        bot.register_next_step_handler(message, process_industry_step)
     else:
-        print("Не удалось подключиться к базе данных")
+        if message.from_user.id not in current_step or current_step[message.from_user.id] != "contact":
+            current_step[message.from_user.id] = "contact"
+            markup = types.ReplyKeyboardMarkup(row_width=1, resize_keyboard=True)
+            item = types.KeyboardButton("Поделиться контактом", request_contact=True)
+            markup.add(item)
+            bot.send_message(message.chat.id, "Пожалуйста, поделись своим контактом, это важно для нас.",
+                             reply_markup=markup)
+            bot.register_next_step_handler(message, process_contact_step)
 
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    item1 = types.KeyboardButton('IT')
-    item2 = types.KeyboardButton('Маркетинг')
-    item3 = types.KeyboardButton('Продюсирование')
-    item4 = types.KeyboardButton('Бьюти')
-    item5 = types.KeyboardButton('Фешн')
-    item6 = types.KeyboardButton('Другое')
 
-    # Добавляем кнопки в клавиатуру
-    markup.add(item1, item2, item3, item4, item5, item6)
-    # Задаем вопрос о Нише
-    bot.send_message(message.chat.id, 'В какой нише ты сейчас работаешь?',  reply_markup=markup)
-    bot.register_next_step_handler(message, process_industry_step)
 
 # Запись ниши в бд
 def process_industry_step(message):
-    industry = message.text
+    if message.text:
+        industry = message.text
 
-    # Соединение с базой данных
-    connection = connect_to_db()
-    if connection is not None:
-        try:
-            cursor = connection.cursor()
-            postgres_update_query = """UPDATE users SET industry = %s WHERE user_id = %s"""
-            record_to_update = (industry, message.from_user.id)
-            cursor.execute(postgres_update_query, record_to_update)
-            connection.commit()
-            print("Ниша успешно сохранена в базе данных")
-        except (Exception, psycopg2.Error) as error:
-            print("Ошибка при выполнении запроса к базе данных:", error)
-        finally:
-            if connection:
-                cursor.close()
-                connection.close()
-                print("Соединение с базой данных закрыто")
+        # Соединение с базой данных
+        connection = connect_to_db()
+        if connection is not None:
+            try:
+                cursor = connection.cursor()
+                postgres_update_query = """UPDATE users SET industry = %s WHERE user_id = %s"""
+                record_to_update = (industry, message.from_user.id)
+                cursor.execute(postgres_update_query, record_to_update)
+                connection.commit()
+                print("Ниша успешно сохранена в базе данных")
+            except (Exception, psycopg2.Error) as error:
+                print("Ошибка при выполнении запроса к базе данных:", error)
+            finally:
+                if connection:
+                    cursor.close()
+                    connection.close()
+                    print("Соединение с базой данных закрыто")
+        else:
+            print("Не удалось подключиться к базе данных")
+
+        markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+        item1 = types.KeyboardButton('0-50т.руб.')
+        item2 = types.KeyboardButton('50-150т.руб.')
+        item3 = types.KeyboardButton('150-500т.руб.')
+        item4 = types.KeyboardButton('500+т.руб.')
+        # Добавляем кнопки в клавиатуру
+        markup.add(item1, item2, item3, item4)
+        # Задаем вопрос о доходе
+        bot.send_message(message.chat.id, 'Сколько в среднем ты сейчас зарабатываешь?', reply_markup=markup)
+        bot.register_next_step_handler(message, process_income_step)
     else:
-        print("Не удалось подключиться к базе данных")
+        if message.from_user.id not in current_step or current_step[message.from_user.id] != "industry":
+            current_step[message.from_user.id] = "industry"
+            markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+            item1 = types.KeyboardButton('IT')
+            item2 = types.KeyboardButton('Маркетинг')
+            item3 = types.KeyboardButton('Продюсирование')
+            item4 = types.KeyboardButton('Бьюти')
+            item5 = types.KeyboardButton('Фешн')
+            item6 = types.KeyboardButton('Другое')
+            markup.add(item1, item2, item3, item4, item5, item6)
+            bot.send_message(message.chat.id, 'В какой нише ты сейчас работаешь?',  reply_markup=markup)
+            bot.register_next_step_handler(message, process_industry_step)
+    return
 
-    markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    item1 = types.KeyboardButton('0-50т.руб.')
-    item2 = types.KeyboardButton('50-150т.руб.')
-    item3 = types.KeyboardButton('150-500т.руб.')
-    item4 = types.KeyboardButton('500+т.руб.')
 
-
-    # Добавляем кнопки в клавиатуру
-    markup.add(item1, item2, item3, item4)
-    # Задаем вопрос о доходе
-    bot.send_message(message.chat.id, 'Сколько в среднем ты сейчас зарабатываешь?', reply_markup=markup)
-    bot.register_next_step_handler(message, process_income_step)
 
 # Запись дохода в бд
 def process_income_step(message):
@@ -315,7 +376,7 @@ def save_database_to_excel():
         print("Не удалось подключиться к базе данных")
 
 # Обработчик команды от пользователя для запроса данных из базы данных и отправки Excel-файла
-@bot.message_handler(func=lambda message: (message.from_user.id == 1793440675 or message.from_user.id == 453421227) and message.text.lower() == 'база')
+@bot.message_handler(func=lambda message: (int(message.from_user.id) == TG_ID1 or int(message.from_user.id) == TG_ID2) and message.text.lower() == 'база')
 def send_data_to_excel(message):
     # Вызов функции для сохранения данных в Excel
     save_database_to_excel()
